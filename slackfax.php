@@ -4,67 +4,44 @@ ini_set('display_errors', 1); //Display errors in case something occurs
 header('Content-Type: application/json'); //Set the header to return JSON, required by Slack
 require_once("slackfax-config.php");
 
-/**
- * @param $url
- * @param $header
- * @param $postfieldspre
- * @return mixed
- */
-function cURLPost($url, $header, $request, $postfieldspre)
-{
-    global $debugmode; //Require global variable $debugmode from config.php
-    $ch = curl_init(); //Initiate a curl session
+if(empty($_REQUEST['token']) || ($_REQUEST['token'] != $slacktoken)) die("Slack token invalid."); //If Slack token is not correct, kill the connection. This allows only Slack to access the page for security purposes.
+if(empty($_REQUEST['text'])) die("No text provided."); //If there is no text added, kill the connection.
 
-    $postfields = json_encode($postfieldspre); //Format the array as JSON
+$tonumber = preg_replace("/[^0-9]/", "", $_REQUEST["text"]);
+$postfields = "To=%2B" . $countrycode . $tonumber . "&From=%2B" . $countrycode . $fromnumber . "&MediaUrl=" . $faxpdf;
 
-    //Same as previous curl array but includes required information for PATCH commands.
-    $curlOpts = array(
-        CURLOPT_URL => $url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => $header,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_CUSTOMREQUEST => $request,
-        CURLOPT_POSTFIELDS => $postfields,
-        CURLOPT_POST => 1,
-        CURLOPT_HEADER => 1,
-    );
-    curl_setopt_array($ch, $curlOpts);
+$ch = curl_init(); //Initiate a curl session
 
-    $answerTCmd = curl_exec($ch);
-    $headerLen = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-    $curlBodyTCmd = substr($answerTCmd, $headerLen);
+//Create curl array to set the API url, headers, and necessary flags.
+$curlOpts = array(
+    CURLOPT_URL => "https://fax.twilio.com/v1/Faxes",
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER => array(),
+    CURLOPT_POST => 1,
+    CURLOPT_POSTFIELDS => $postfields,
+    CURLOPT_FOLLOWLOCATION => true,
+    CURLOPT_HEADER => 1,
+    CURLOPT_USERPWD => $accountsid . ":" . $authtoken,
+);
+curl_setopt_array($ch, $curlOpts); //Set the curl array to $curlOpts
 
-    if($debugmode)
-    {
-        var_dump($answerTCmd);
-    }
+$answerTData = curl_exec($ch); //Set $answerTData to the curl response to the API.
+$headerLen = curl_getinfo($ch, CURLINFO_HEADER_SIZE);  //Get the header length of the curl response
+$curlBodyTData = substr($answerTData, $headerLen); //Remove header data from the curl string.
 
-    // If there was an error, show it
-    if (curl_error($ch)) {
-        die(curl_error($ch));
-    }
-    curl_close($ch);
-    if($curlBodyTCmd == "ok") //Slack catch
-    {
-        return null;
-    }
-
+// If there was an error, show it
+if (curl_error($ch)) {
+    die(curl_error($ch));
 }
+curl_close($ch);
 
-//Timeout Fix Block
-if($timeoutfix == true)
+$jsonDecode = json_decode($curlBodyTData); //Decode the JSON returned by the Twilio API.
+
+if(array_key_exists("status",$jsonDecode) && $jsonDecode->status=="queued")
 {
-    ob_end_clean();
-    header("Connection: close");
-    ob_start();
-    echo ('{"response_type": "in_channel"}');
-    $size = ob_get_length();
-    header("Content-Length: $size");
-    ob_end_flush();
-    flush();
-    session_write_close();
-    if($sendtimeoutwait==true) {
-        cURLPost($_REQUEST["response_url"], array("Content-Type: application/json"), "POST", array("parse" => "full", "response_type" => "ephemeral", "text" => "Please wait..."));
-    }
+    die("A fax has been queued for delivery to " . $jsonDecode->to);
 }
-//End timeout fix block
+else
+{
+    var_dump($jsonDecode);
+}
